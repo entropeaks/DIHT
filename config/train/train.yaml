@@ -1,8 +1,7 @@
-epochs: 200
+epochs: 2
 head_lr: 0.00005
 backbone_lr: 0.000005
 weight_decay: 0.0001
-margin: 1.0
-sampler:
-  P: 16
-  K: 4
+margin: 0.4
+sampler_P: 16
+sampler_K: 4

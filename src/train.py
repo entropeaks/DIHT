@@ -10,7 +10,7 @@ from transformers import AutoImageProcessor
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, processor, gallery_loader: DataLoader, query_loader: DataLoader, recall_k: list=[1, 3]):
+def evaluate(model: nn.Module, processor, gallery_loader: DataLoader, query_loader: DataLoader, recall_k: list=[1, 3]) -> dict:
     """
     Compute Recall@k in pure PyTorch.
     
@@ -22,7 +22,7 @@ def evaluate(model: nn.Module, processor, gallery_loader: DataLoader, query_load
         device: str
     
     Returns:
-        recall_at_k: float
+        recall_at_k: list
     """
     model.eval()
 
