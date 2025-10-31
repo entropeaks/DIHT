@@ -10,6 +10,8 @@ from transformers.image_utils import load_image
 from typing import Tuple
 import numpy as np
 
+RANDOM_SEED = 42
+
 
 def make_transform(resize_size: int = 224):
     to_tensor = v2.ToImage()
@@ -21,37 +23,118 @@ def make_transform(resize_size: int = 224):
     )
     return v2.Compose([to_tensor, resize, to_float, normalize])
 
-#dirty hacky way to do stratified split
-def train_test_split(paths: list, labels: list, ratio: int, random_state: int=None) -> Tuple[list, list, list, list]:
-    paths = np.array(paths)
-    labels = np.array(labels)
-    random.seed(a=random_state)
-    n_classes = len(set(labels))
-    samples_per_class = int(len(labels)/n_classes)
-    train_indices = []
-    test_indices = []
-    split_size = int(samples_per_class*ratio)
-    for i in range(n_classes):
-        cursor = i*samples_per_class
-        split_idx = random.randint(0, samples_per_class-1)
-        for i in range(split_size):
-            test_indices.append(cursor+(split_idx + i) % samples_per_class)
-        for i in range(samples_per_class - split_size):
-            train_indices.append(cursor+(split_idx + split_size + i) % samples_per_class)
-    
-    return paths[train_indices].tolist(), paths[test_indices].tolist(), labels[train_indices].tolist(), labels[test_indices].tolist()
 
-
-def extractPaths(root_path: Path) -> Tuple[list[Path], list[int]]:
-    images_paths = []
-    labels = []
-    for label, class_dir in enumerate(root_path.iterdir()):
-            if class_dir.is_dir():
-                for image_path in class_dir.iterdir():
-                    images_paths.append(image_path.as_posix())
-                    labels.append(label)
+def create_dataset_splits(
+    original_dir: Path,
+    augmented_dir: Path,
+    train_ratio: float,
+    val_ratio: float,
+    k_query: int,
+    seed: int=RANDOM_SEED
+):
+    """
+    Creates train, gallery, and query splits based on class-level separation.
+    """
+    # Set seeds for reproducibility
+    random.seed(seed)
+    np.random.seed(seed)
     
-    return images_paths, labels
+    # 1. Get all available classes (e.g., ["001", "002", ...])
+    # We assume the class folders are the same in both directories
+    if not original_dir.exists():
+        print(f"Error: Original data directory not found at {original_dir}")
+        return None
+        
+    all_classes = sorted([d.name for d in original_dir.iterdir() if d.is_dir()])
+    num_classes = len(all_classes)
+    
+    if num_classes == 0:
+        print(f"Error: No class folders found in {original_dir}")
+        return None
+
+    print(f"Found {num_classes} total classes.")
+
+    # 2. Split classes into train, val, and test
+    shuffled_classes = np.random.permutation(all_classes)
+    
+    num_train = int(num_classes * train_ratio)
+    num_val = int(num_classes * val_ratio)
+    
+    # Ensure at least 1 class in each split if ratios are small
+    num_train = max(1, num_train)
+    num_val = max(1, num_val)
+    
+    train_classes = set(shuffled_classes[:num_train])
+    val_classes = set(shuffled_classes[num_train : num_train + num_val])
+    test_classes = set(shuffled_classes[num_train + num_val:])
+    
+    print(f"Splitting classes: {len(train_classes)} Train / {len(val_classes)} Val / {len(test_classes)} Test\n")
+
+    # 3. Initialize lists for our dataloaders
+    train_paths, train_labels = [], []
+    gallery_paths, gallery_labels = [], []
+    val_query_paths, val_query_labels = [], []
+    test_query_paths, test_query_labels = [], []
+
+    # 4. Process Train Classes
+    print("Processing Train classes...")
+    for class_name in train_classes:
+        # A. Populate Train Loader (from augmented data)
+        aug_class_dir = augmented_dir / class_name
+        aug_images = [str(p) for p in aug_class_dir.glob('*.*')]
+        train_paths.extend(aug_images)
+        train_labels.extend([int(class_name)] * len(aug_images))
+        
+        # B. Populate Gallery (from original data)
+        # All original samples from train classes go into the gallery
+        orig_class_dir = original_dir / class_name
+        orig_images = [str(p) for p in orig_class_dir.glob('*.*')]
+        gallery_paths.extend(orig_images)
+        gallery_labels.extend([int(class_name)] * len(orig_images))
+
+    # 5. Process Validation Classes
+    print("Processing Validation classes...")
+    for class_name in val_classes:
+        orig_class_dir = original_dir / class_name
+        all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
+        random.shuffle(all_class_images) # Shuffle to pick random queries
+        
+        # A. Split into Query and Gallery
+        val_query_paths.extend(all_class_images[:k_query])
+        val_query_labels.extend([int(class_name)] * k_query)
+        
+        gallery_paths.extend(all_class_images[k_query:])
+        gallery_labels.extend([int(class_name)] * (len(all_class_images) - k_query))
+
+    # 6. Process Test Classes
+    print("Processing Test classes...")
+    for class_name in test_classes:
+        orig_class_dir = original_dir / class_name
+        all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
+        random.shuffle(all_class_images) # Shuffle to pick random queries
+        
+        # A. Split into Query and Gallery
+        test_query_paths.extend(all_class_images[:k_query])
+        test_query_labels.extend([int(class_name)] * k_query)
+        
+        gallery_paths.extend(all_class_images[k_query:])
+        gallery_labels.extend([int(class_name)] * (len(all_class_images) - k_query))
+
+    print("\n--- Data Split Summary ---")
+    print(f"Training Loader:   {len(train_paths):>5} samples from {len(train_classes)} classes (Augmented)")
+    print(f"Gallery Loader:    {len(gallery_paths):>5} samples from {num_classes} classes (Original)")
+    print(f"Val Query Loader:  {len(val_query_paths):>5} samples from {len(val_classes)} classes (Original)")
+    print(f"Test Query Loader: {len(test_query_paths):>5} samples from {len(test_classes)} classes (Original)")
+    
+    # 7. Return all the file lists
+    data_splits = {
+        "train": (train_paths, train_labels),
+        "gallery": (gallery_paths, gallery_labels),
+        "val_query": (val_query_paths, val_query_labels),
+        "test_query": (test_query_paths, test_query_labels)
+    }
+    
+    return data_splits
 
 
 class ImageCollectionDataset(ABC):

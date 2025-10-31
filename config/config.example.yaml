@@ -1,0 +1,5 @@
+wandb:
+  project_name: "myproject"
+  entity: "my_entity"
+
+device: "cuda"

@@ -194,9 +194,10 @@ def train_and_evaluate(run: wandb.Run,
                        model: nn.Module,
                        processor: AutoImageProcessor,
                        train_dataloader: DataLoader,
+                       gallery_dataloader: DataLoader,
                        val_dataloader: DataLoader,
+                       optim_params: dict,
                        epochs: int=10,
-                       lr: int=1e-4,
                        weight_decay: float=1e-4,
                        margin: int=0.2,
                        recall_k: list=[5]):
@@ -205,8 +206,7 @@ def train_and_evaluate(run: wandb.Run,
     best_score = 0.0
     best_loss = float('inf')
     loss = nn.TripletMarginLoss(margin=margin, p=2)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    train_dataloader_transform = train_dataloader.dataset.transform
+    optimizer = torch.optim.AdamW(optim_params, weight_decay=weight_decay)
     for epoch in tqdm(range(epochs)):
         model.train()
         cumulative_loss = 0.0
@@ -238,14 +238,11 @@ def train_and_evaluate(run: wandb.Run,
         cumulative_loss /= len(train_dataloader)
         cumulative_pos_dist /= len(train_dataloader)
         cumulative_neg_dist /= len(train_dataloader)
-        train_dataloader.dataset.transform = val_dataloader.dataset.transform
-        scores = evaluate(model, processor, train_dataloader, val_dataloader, recall_k)
-        train_dataloader.dataset.transform = train_dataloader_transform
+        scores = evaluate(model, processor, gallery_dataloader, val_dataloader, recall_k)
         run.log({"loss": cumulative_loss, "mean_pos_dist": cumulative_pos_dist, "mean_neg_dist": cumulative_neg_dist, "triplets_mined": cumulative_triplets_count, **scores})
         if np.mean([score for score in scores.values()]) > best_score:
             best_score = np.mean([score for score in scores.values()])
             torch.save(model.state_dict(), f"model_checkpoints/{run.name}.pth")
-            print(f"New best model saved with mean recall {best_score:.4f} at epoch {epoch+1}")
         if cumulative_loss < best_loss:
             best_loss = cumulative_loss
             torch.save(model.state_dict(), f"model_checkpoints/{run.name}_best_loss.pth")

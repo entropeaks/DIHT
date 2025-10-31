@@ -7,6 +7,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from src.model import SiameseDino
 from src.data import LazyLoadCollection, make_transform
+from src.utils import set_device
 from transformers import AutoModel, AutoImageProcessor
 from tqdm import tqdm
 from umap import UMAP
@@ -34,20 +35,20 @@ def compute_embeddings(model, images_paths: list[Path], labels: list[int]):
     embeddings = np.concatenate(embeddings, axis=0)
     return embeddings
 
-checkpoint = "stellar-plant-74"
-processor = AutoImageProcessor.from_pretrained("facebook/dinov3-vitl16-pretrain-lvd1689m")
+checkpoint = "magic-field-141"
+processor = AutoImageProcessor.from_pretrained("facebook/dinov3-vitb16-pretrain-lvd1689m")
 dinov3_model = AutoModel.from_pretrained(
-    "facebook/dinov3-vitl16-pretrain-lvd1689m",
+    "facebook/dinov3-vitb16-pretrain-lvd1689m",
     dtype=torch.float32
 )
 hidden_dim = 512
 output_dim = 128
-device = torch.device("mps:0" if torch.backends.mps.is_available() else "cpu")
+device = set_device("cuda")
 siamese_model = SiameseDino(dinov3_model, hidden_dim, output_dim)
 siamese_model.load_state_dict(torch.load(f"model_checkpoints/{checkpoint}.pth"))
 _ = siamese_model.to(device)
 
-data_root_path = Path("data")
+data_root_path = Path("data/original_data")
 images_paths, labels = extractPaths(data_root_path)
 
 samples = []

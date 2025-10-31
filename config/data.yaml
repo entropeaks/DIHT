@@ -1,0 +1,8 @@
+data:
+  original_dataset_path: "data/augmented_data16"
+  augmented_dataset_path: "data/original_data"
+  val_size: 0.2
+  test_size: 0.1
+  sampler:
+    P: 16
+    K: 4
