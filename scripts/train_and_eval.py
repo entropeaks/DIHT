@@ -14,6 +14,10 @@ from torchvision.transforms import v2
 
 
 config = load_config("config/config.yaml")
+training_config = load_config("config/training.yaml")
+model_config = load_config("config/model.yaml")
+data_config = load_config("config/data.yaml")
+eval_config = load_config("config/evaluation.yaml")
 
 train_transforms = v2.Compose([
     v2.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0)),   
@@ -23,10 +27,6 @@ train_transforms = v2.Compose([
     v2.RandomRotation(degrees=15),                             
 ])
 
-training_config = config["training"]
-model_config = config["model"]
-data_config = config["data"]
-
 device = set_device(config["device"])
 
 random_state = 42
@@ -34,18 +34,18 @@ random_state = 42
 processor = AutoImageProcessor.from_pretrained(model_config["backbone_name"])
 backbone = AutoModel.from_pretrained(model_config["backbone_name"], dtype=torch.float32)
 
-EXPERIMENT_DATA_PATH = Path(data_config["dataset_path"])
-ORIGINAL_DATA_PATH = Path("data/original_data")
+EXPERIMENT_DATA_PATH = Path(data_config["augmented_dataset_path"])
+ORIGINAL_DATA_PATH = Path(data_config["original_dataset_path"])
 
-training_size = 1 - (data_config["val_size"] + data_config["test_size"])
-data_splits = create_dataset_splits(ORIGINAL_DATA_PATH, EXPERIMENT_DATA_PATH, training_size, data_config["val_size"], config["evaluation"]["k_query"], random_state)
+training_size = 1 - (eval_config["val_size"] + eval_config["test_size"])
+data_splits = create_dataset_splits(ORIGINAL_DATA_PATH, EXPERIMENT_DATA_PATH, training_size, eval_config["val_size"], eval_config["k_query"], random_state)
 train_paths, train_labels = data_splits["train"]
 gallery_paths, gallery_labels = data_splits["gallery"]
 val_query_paths, val_query_labels = data_splits["val_query"]
 test_query_paths, test_query_labels = data_splits["test_query"]
 
 train_dataset = CachedCollection(train_paths, train_labels, transform=v2.Compose([train_transforms, make_transform()]))
-pksampler = PKSampler(train_dataset, config["data"]["sampler"]["P"], config["data"]["sampler"]["K"])
+pksampler = PKSampler(train_dataset, training_config["sampler"]["P"], training_config["sampler"]["K"])
 train_dataloader = DataLoader(train_dataset, batch_sampler=pksampler)
 
 gallery_dataset = CachedCollection(gallery_paths, gallery_labels, transform=make_transform())
@@ -78,6 +78,6 @@ train_and_evaluate(run,
                    training_config["epochs"],
                    training_config["weight_decay"],
                    training_config["margin"],
-                   config["evaluation"]["recall_k"]
+                   eval_config["recall_k"]
                    )
 run.finish()

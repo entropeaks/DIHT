@@ -246,6 +246,6 @@ def train_and_evaluate(run: wandb.Run,
         if cumulative_loss < best_loss:
             best_loss = cumulative_loss
             torch.save(model.state_dict(), f"model_checkpoints/{run.name}_best_loss.pth")
-        torch.save(model.state_dict(), f"model_checkpoints/{run.name}_last.pth")
+    torch.save(model.state_dict(), f"model_checkpoints/{run.name}_last.pth")
 
     return scores
