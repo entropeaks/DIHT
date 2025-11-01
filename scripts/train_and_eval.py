@@ -17,7 +17,6 @@ from torchvision.transforms import v2
 
 @hydra.main(config_path="../config", config_name="base_config", version_base=None)
 def main(config: Config):
-    print(OmegaConf.to_yaml(config))
 
     train_transforms = v2.Compose([
         v2.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0)),   
@@ -71,6 +70,7 @@ def main(config: Config):
     ]
 
     run = wandb.init(project=config.base.wandb_project_name, entity=config.base.wandb_entity, config=OmegaConf.to_container(config, resolve=True))
+    
     train_and_evaluate(run,
                     siamese_model,
                     processor,
@@ -83,7 +83,13 @@ def main(config: Config):
                     config.train.margin,
                     config.eval.recall_k
                     )
-    final_scores = evaluate(siamese_model, processor, gallery_dataloader, test_dataloader, config.eval.recall_k)
+    
+    final_scores = evaluate(siamese_model,
+                            processor,
+                            gallery_dataloader,
+                            test_dataloader,
+                            config.eval.recall_k)
+    
     run.log({f"test_{k}": v for k, v in final_scores.items()})
     run.finish()
 
