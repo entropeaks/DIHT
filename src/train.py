@@ -204,7 +204,7 @@ def train_and_evaluate(run: wandb.Run,
     
     scores = {f"recall@{k}": 0 for k in recall_k}
     best_score = 0.0
-    best_loss = float('inf')
+    best_metrics = {}
     loss = nn.TripletMarginLoss(margin=margin, p=2)
     optimizer = torch.optim.AdamW(optim_params, weight_decay=weight_decay)
     for epoch in tqdm(range(epochs)):
@@ -242,10 +242,8 @@ def train_and_evaluate(run: wandb.Run,
         run.log({"loss": cumulative_loss, "mean_pos_dist": cumulative_pos_dist, "mean_neg_dist": cumulative_neg_dist, "triplets_mined": cumulative_triplets_count, **scores})
         if np.mean([score for score in scores.values()]) > best_score:
             best_score = np.mean([score for score in scores.values()])
+            best_metrics = scores.copy()
             torch.save(model.state_dict(), f"model_checkpoints/{run.name}.pth")
-        if cumulative_loss < best_loss:
-            best_loss = cumulative_loss
-            torch.save(model.state_dict(), f"model_checkpoints/{run.name}_best_loss.pth")
-    torch.save(model.state_dict(), f"model_checkpoints/{run.name}_last.pth")
 
-    return scores
+
+    return best_metrics
