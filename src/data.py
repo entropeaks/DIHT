@@ -24,6 +24,18 @@ def make_transform(resize_size: int = 224):
     return v2.Compose([to_tensor, resize, to_float, normalize])
 
 
+def extract_paths_and_labels(directory: Path) -> Tuple[list, list]:
+    paths = []
+    labels = []
+    for class_dir in directory.iterdir():
+        if class_dir.is_dir():
+            for img_path in class_dir.iterdir():
+                paths.append(img_path.as_posix())
+                labels.append(int(class_dir.name))
+
+    return paths, labels
+
+
 class DataPreparator():
 
     def __init__(self,
@@ -202,6 +214,7 @@ class DataPreparator():
         splits = self._create_dataset_splits(train_classes, val_classes, test_classes, n_query)
 
         return splits
+
 
 
 class ImageCollectionDataset(ABC):

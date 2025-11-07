@@ -162,16 +162,18 @@ def mine_semi_hard_triplets_cdist(embeddings: torch.Tensor, labels: np.ndarray, 
     return triplets
 
 
-def train(model: nn.Module, processor, dataloader: DataLoader, epochs=10, lr=1e-4, margin=0.2):
+def train(model_id: str, model: nn.Module, processor: AutoImageProcessor, train_dataloader: DataLoader, gallery_dataloader: DataLoader, queries_dataloader: DataLoader, optim_params: dict, epochs: int=10, weight_decay: float=0.0001, margin: float=0.2, recall_k: list=[1, 3, 10]):
     model.train()
     losses = []
     loss = nn.TripletMarginLoss(margin=margin, p=2)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(optim_params, weight_decay=weight_decay)
+    best_score = 0.0
+    best_metrics = {}
     for epoch in tqdm(range(epochs)):
-        for images, labels in dataloader:
+        for images, labels in train_dataloader:
             inputs = processor(images=images, return_tensors="pt").to(model.device)
             embeddings = model(**inputs)
-            triplets = mine_semi_hard_triplets_cdist(embeddings, labels)
+            triplets = mine_semi_hard_triplets_cdist(embeddings, labels, margin)
             if not triplets:
                 continue
             anchor_indices, positive_indices, negative_indices = zip(*triplets)
@@ -187,7 +189,13 @@ def train(model: nn.Module, processor, dataloader: DataLoader, epochs=10, lr=1e-
             optimizer.step()
             losses.append(triplet_loss.detach().cpu().item())
 
-    return losses
+        scores = evaluate(model, processor, gallery_dataloader, queries_dataloader, recall_k)
+        if np.mean([score for score in scores.values()]) > best_score:
+            best_score = np.mean([score for score in scores.values()])
+            best_metrics = scores.copy()
+            torch.save(model.state_dict(), f"model_checkpoints/{model_id}.pth")
+
+    return losses, best_metrics
 
 
 def train_and_evaluate(run: wandb.Run,
@@ -200,7 +208,7 @@ def train_and_evaluate(run: wandb.Run,
                        epochs: int=10,
                        weight_decay: float=1e-4,
                        margin: int=0.2,
-                       recall_k: list=[5]):
+                       recall_k: list=[1, 3, 10]):
     
     scores = {f"recall@{k}": 0 for k in recall_k}
     best_score = 0.0
