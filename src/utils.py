@@ -5,7 +5,10 @@ from tqdm import tqdm
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 from PIL import Image
 from pathlib import Path
+import random
 import yaml
+
+from src.data import RANDOM_SEED
 
 def set_device(device: str) -> torch.device:
     if device == "cuda":
@@ -92,3 +95,14 @@ class Browser:
             src_img = Image.open(path.as_posix())
             new_img = transform.get_transformed(src_img)
             new_img.save(destinationPath.joinpath(label).joinpath(path.name))
+
+    def sample_k_per_class(self, k: int, random_state: int=RANDOM_SEED) -> Tuple[List, List]:
+        paths = []
+        labels = []
+        for class_dir in self._iterate_on_classes():
+            class_paths = [path.as_posix() for path in class_dir.iterdir()]
+            class_path = random.sample(class_paths, k)
+            paths.extend(class_path)
+            labels.extend([int(class_dir.name)]*len(class_path))
+
+        return paths, labels

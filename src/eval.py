@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Union, List, Dict
+from typing import List, Dict, TypeAlias
 import numpy as np
 
-Score = Union[float, List[float]]
+Score: TypeAlias = float | List[float]
 
 
 class Metric(ABC):
@@ -14,7 +14,7 @@ class Metric(ABC):
         pass
 
 
-class Recall():
+class Recall(Metric):
     def __init__(self, k: List=[1, 3, 10]):
         self.k = k
 

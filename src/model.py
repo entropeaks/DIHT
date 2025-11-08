@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
+from typing import List, Tuple
 import numpy as np
 import cv2
 from src.eval import Metric, Score
@@ -44,13 +45,12 @@ class PrototypicalNetwork(nn.Module):
 
 class OrbAlgorithmTester:
 
-    def __init__(self, paths: list, labels: list):
-        self.paths = np.array(paths)
-        self.labels = np.array(labels)
-        self.orb = cv2.ORB_create(nfeatures=1000)
+    def __init__(self, n_features: int, paths: List, labels: List):
+        self.paths = paths
+        self.labels = labels
+        self.orb = cv2.ORB_create(nfeatures=n_features)
         self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         self.descriptors = self._get_imgs_descriptors()
-        self.similarity_matrix = self._compute_similarity_matrix()
         
 
     def _get_imgs_descriptors(self):
@@ -69,7 +69,8 @@ class OrbAlgorithmTester:
         return descriptors
 
     def evaluate(self, metric: Metric) -> Score:
-        return metric.compute(self.similarity_matrix, self.labels)
+        self.similarity_matrix = self._compute_similarity_matrix()
+        return metric.compute(self.similarity_matrix, np.array(self.labels))
 
     def _compute_similarity_matrix(self):
         print("Computing similarity matrix...")
@@ -90,3 +91,15 @@ class OrbAlgorithmTester:
         similarity = 1 / (1 + avg_distance)
 
         return similarity
+    
+    def get_nearest_neighbor(self, ref_path: str) -> Tuple[str, Score]:
+        highest_similarity = 0
+        idx_closest = 0
+        ref_descriptors = self._compute_img_descriptors(ref_path)
+        for idx, compared_descriptor in enumerate(self.descriptors):
+            similarity = self._compute_similarity(ref_descriptors, compared_descriptor)
+            if similarity > highest_similarity:
+                highest_similarity = similarity
+                idx_closest = idx
+        
+        return self.paths[idx_closest]
