@@ -200,6 +200,49 @@ class Whitened(FeatureExtractor):
         self.whitener = ZCAWhitening(eps_rel=self.eps_rel).fit(np.vstack(pool))
 
 
+class RotationAveraged(FeatureExtractor):
+    """Averages an extractor's descriptors over the four 90-degree rotations.
+
+    The caps sit at arbitrary angles, and a descriptor that is not rotation
+    invariant sees a different image each time one is turned. Averaging the four
+    lossless rotations -- np.rot90 moves pixels without resampling, so nothing is
+    interpolated away -- gives a descriptor that no longer depends on how the cap
+    happened to land.
+
+    Stateless, so no fit: unlike the vocabulary or the whitening, there is
+    nothing here to estimate from a corpus. It costs four backbone passes per
+    image, which is the whole of its price.
+
+    Each view is L2-normalised before averaging so one view cannot dominate by
+    magnitude, and the mean is normalised again. Whitening after this rather than
+    before makes no measurable difference -- whitening is affine, so it commutes
+    with the mean up to the per-view renormalisation.
+    """
+
+    def __init__(self, extractor: FeatureExtractor, n_views: int=4):
+        self.trainable = getattr(extractor, "trainable", False)
+        self.extractor = extractor
+        self.n_views = n_views
+
+    def get_features(self, imgs_arrays_rgb: list[np.ndarray]) -> list[np.ndarray]:
+        total = None
+        for turns in range(self.n_views):
+            views = (imgs_arrays_rgb if turns == 0
+                     else [np.rot90(img, turns).copy() for img in imgs_arrays_rgb])
+            described = np.asarray(self.extractor.get_features(views), dtype=np.float64)
+            described = described.reshape(len(described), -1)
+            described /= np.linalg.norm(described, axis=1, keepdims=True) + 1e-12
+            total = described if total is None else total + described
+
+        total /= np.linalg.norm(total, axis=1, keepdims=True) + 1e-12
+        return list(total)
+
+    def fit(self, dataloader) -> None:
+        """Pass through: only the wrapped extractor may have anything to learn."""
+        if getattr(self.extractor, "trainable", False):
+            self.extractor.fit(dataloader)
+
+
 class SIFTFeatureExtractor(FeatureExtractor):
 
     def __init__(self, min_match_count: int=10):
