@@ -15,8 +15,9 @@ eval:
 
 model:
   backbone_name: "facebook/dinov3-vitb16-pretrain-lvd1689m"
+  pooling: "gem"              # cls | gem | avg
   hidden_dim: 0
-  output_dim: 128
+  projection_head_size: 128   # 0 drops the head entirely
   normalize: true
   dropout: 0
 

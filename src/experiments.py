@@ -69,6 +69,8 @@ class ChannelSpec:
     vocabulary_size: int = 256  # <name>-bovw -- number of visual words
     whiten: bool = False        # equalise the descriptor covariance before indexing
     whiten_eps_rel: float = 0.05
+    pooling: str = None         # extractor: siamese -- cls | gem | avg, else the model config's
+    projection_head_size: int = None  # extractor: siamese -- 0 drops the head
     config: str = None          # extractor: siamese -- path to the model config
     checkpoint: str = None      # extractor: siamese -- weights to load, else the bare backbone
 
@@ -123,7 +125,9 @@ def _base_extractor(spec: ChannelSpec):
 
     # MockRun rather than a real one: an experiment should not open a W&B run per
     # fold, and the config it would read from may well name a project
-    model = SiameseDino(load_config(spec.config), run=MockRun())
+    model = SiameseDino(load_config(spec.config), run=MockRun(),
+                        pooling=spec.pooling,
+                        projection_head_size=spec.projection_head_size)
     if spec.checkpoint:
         model.load_state_dict(torch.load(spec.checkpoint, map_location=model.device))
     model.eval()
