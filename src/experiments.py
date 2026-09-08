@@ -31,8 +31,9 @@ from src.distances.kernels import (BhattacharyyaKernel, BinaryJaccardKernel,
 from src.eval import ConfusionArray, Recall
 from src.config import load_config
 from src.extractors import (BagOfVisualWords, DocTRTextExtractor, HSVExtractor,
-                            MockRun, OrbFeatureExtractor, SIFTFeatureExtractor,
-                            RotationAveraged, SiameseDino, Whitened)
+                            MockRun, N_ROTATION_VIEWS, OrbFeatureExtractor,
+                            SIFTFeatureExtractor, RotationAveraged, SiameseDino,
+                            Whitened)
 from src.feature_stores import InMemoryStore
 from src.rerankers import HSVReranker, ORBReranker
 from src.types import RetrievalChannel
@@ -45,6 +46,11 @@ KERNELS = {"bhattacharyya": BhattacharyyaKernel, "euclidean": EuclidianDistanceK
            "jaccard": BinaryJaccardKernel}
 WEIGHTINGS = {"binary": BinaryStrategy, "tfidf": TFIDFStrategy}
 RERANKERS = {"hsv": HSVReranker, "orb": ORBReranker}
+# where the whitening is applied: nowhere, on the descriptors an extractor hands
+# out, or folded into the projection head's initialisation
+WHITEN_MODES = ("none", "post", "head_init")
+# which images a descriptor-only fit may see; labels never leave the train split
+FIT_CORPORA = ("train", "train+gallery", "all")
 
 
 @dataclass
@@ -65,15 +71,52 @@ class ChannelSpec:
     kernel: str = "bhattacharyya"
     weighting: str = "binary"
     weight: float = 1.0
-    is_trainable: bool = False  # fit the extractor on the fold's train split first
+    is_trainable: bool = False  # train the extractor on the fold's train split
     vocabulary_size: int = 256  # <name>-bovw -- number of visual words
-    whiten: bool = False        # equalise the descriptor covariance before indexing
+    whiten: str = "none"        # none | post | head_init -- see WHITEN_MODES
     whiten_eps_rel: float = 0.05
     rotation_tta: bool = False  # average over the four 90-degree rotations
     pooling: str = None         # extractor: siamese -- cls | gem | avg, else the model config's
     projection_head_size: int = None  # extractor: siamese -- 0 drops the head
     config: str = None          # extractor: siamese -- path to the model config
     checkpoint: str = None      # extractor: siamese -- weights to load, else the bare backbone
+
+    def __post_init__(self):
+        """Refuse combinations that would be silently ignored rather than run.
+
+        A dropped flag is worse here than a crash: the record would carry
+        `whiten` in its config and so earn its own fingerprint, while
+        describing a run identical to the one without it. Two entries claiming
+        to compare something, measuring the same thing.
+        """
+        if self.whiten not in WHITEN_MODES:
+            raise ValueError(f"whiten must be one of {WHITEN_MODES}, got {self.whiten!r}")
+
+        if self.whiten == "post" and (self.index != "dense" or self.kernel != "euclidean"):
+            # whitening emits signed dense vectors: bhattacharyya needs
+            # non-negative ones and jaccard needs binary, so neither survives it
+            raise ValueError(
+                f"whiten: post needs index: dense and kernel: euclidean "
+                f"(whitening then euclidean is the Mahalanobis distance), "
+                f"got index: {self.index}, kernel: {self.kernel}")
+
+        if self.whiten == "head_init" and self.extractor != "siamese":
+            raise ValueError(
+                f"whiten: head_init folds the whitening into a projection head, "
+                f"which only extractor: siamese has; got {self.extractor!r}. "
+                f"Use whiten: post instead.")
+
+    @property
+    def needs_fit(self) -> bool:
+        """Whether the channel must see a corpus before it can describe anything.
+
+        Derived rather than declared: a vocabulary and a whitening always need
+        fitting, so making the config say so again only creates a way to forget.
+        `is_trainable` stays a genuine choice -- the same backbone serves frozen
+        or trained -- so it is the one thing left to declare.
+        """
+        return (self.is_trainable or self.whiten != "none"
+                or self.extractor.endswith("-bovw"))
 
 
 @dataclass
@@ -88,8 +131,13 @@ class ExperimentConfig:
     data: DataSpec
     channels: list[ChannelSpec]
     reranker: RerankerSpec = None
+    fit_corpus: str = "train"   # train | train+gallery | all -- see FIT_CORPORA
     smoothing_param: int = 10
     recall_k: list[int] = field(default_factory=lambda: [1, 3, 5])
+
+    def __post_init__(self):
+        if self.fit_corpus not in FIT_CORPORA:
+            raise ValueError(f"fit_corpus must be one of {FIT_CORPORA}, got {self.fit_corpus!r}")
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -113,11 +161,14 @@ def build_extractor(spec: ChannelSpec):
     Rotation averaging sits below the whitening: the whitening is then fitted on
     the descriptors it will actually transform, rather than on single views it
     never sees again.
+
+    `whiten: head_init` adds no wrapper at all -- the whitening lives inside the
+    model as its head's initialisation, which is the point of that mode.
     """
     extractor = _base_extractor(spec)
     if spec.rotation_tta:
         extractor = RotationAveraged(extractor)
-    if spec.whiten:
+    if spec.whiten == "post":
         extractor = Whitened(extractor, eps_rel=spec.whiten_eps_rel)
     return extractor
 
@@ -136,7 +187,13 @@ def _base_extractor(spec: ChannelSpec):
     # fold, and the config it would read from may well name a project
     model = SiameseDino(load_config(spec.config), run=MockRun(),
                         pooling=spec.pooling,
-                        projection_head_size=spec.projection_head_size)
+                        projection_head_size=spec.projection_head_size,
+                        trainable=spec.is_trainable,
+                        whiten_head=spec.whiten == "head_init",
+                        whiten_eps_rel=spec.whiten_eps_rel,
+                        # the head must be initialised on the descriptors the
+                        # channel will feed it, averaged views included
+                        whiten_rotations=N_ROTATION_VIEWS if spec.rotation_tta else 1)
     if spec.checkpoint:
         model.load_state_dict(torch.load(spec.checkpoint, map_location=model.device))
     model.eval()
@@ -150,7 +207,7 @@ def build_channel(spec: ChannelSpec) -> RetrievalChannel:
     else:
         index = DenseIndex(kernel)
     return RetrievalChannel(build_extractor(spec), index, weight=spec.weight,
-                            is_trainable=spec.is_trainable)
+                            is_trainable=spec.needs_fit)
 
 
 def build_engine(config: ExperimentConfig, preprocessor: v2.Compose,
@@ -167,6 +224,39 @@ def build_engine(config: ExperimentConfig, preprocessor: v2.Compose,
         evaluate_energy_consumption=False,
         progress=progress,
     )
+
+
+def fit_corpus_split(mode: str, fold: dict) -> tuple[list, list]:
+    """The images a descriptor-only fit may see, per `fit_corpus`.
+
+    Whitening and vocabularies read descriptors and never labels, so they are
+    not confined to the labelled train split the way a triplet loss is. How far
+    past it they may go is a methodological choice, not a detail:
+
+    - `train` is always honest, and the smallest corpus. A covariance in a few
+      hundred dimensions estimated on a few hundred images is what the
+      `eps_rel` shrinkage exists to prop up.
+    - `train+gallery` is reproducible in deployment -- the gallery is enrolled
+      before any query arrives, so its covariance is knowable then too -- and
+      uses no labels, which is what separates it from fitting an LDA on the
+      gallery.
+    - `all` adds the queries, and is transductive: the estimate then depends on
+      the very queries it will be scored against, which no deployed system
+      gets. It inflates recall without the deployed system benefiting.
+
+    Whichever is chosen lands in the config, and so in the fingerprint, because
+    two records fitted under different regimes are not comparable.
+    """
+    paths, labels = list(fold["train"][0]), list(fold["train"][1])
+    if mode == "train":
+        return paths, labels
+
+    paths += list(fold["gallery"][0])
+    labels += list(fold["gallery"][1])
+    if mode == "all":
+        paths += list(fold["val_query"][0])
+        labels += list(fold["val_query"][1])
+    return paths, labels
 
 
 def run(config: ExperimentConfig, quiet: bool = True) -> list[dict]:
@@ -199,12 +289,18 @@ def run(config: ExperimentConfig, quiet: bool = True) -> list[dict]:
             engine = build_engine(config, preprocessor, progress=not quiet)
             metrics = [Recall(recall_k=config.recall_k), ConfusionArray()]
             with contextlib.redirect_stdout(io.StringIO()) if quiet else contextlib.nullcontext():
-                if any(spec.is_trainable for spec in config.channels):
-                    # a vocabulary is fitted on the fold's train classes, never on
-                    # the gallery or the queries it will be scored against
-                    engine.fit(DataLoader(
+                if any(spec.needs_fit for spec in config.channels):
+                    # two corpora: anything reading labels gets the train split
+                    # alone, anything reading descriptors gets what fit_corpus
+                    # allows -- see `fit_corpus_split`
+                    train_loader = DataLoader(
                         CachedCollection(train_paths, train_labels, preprocessor=preprocessor),
-                        batch_size=config.data.batch_size, collate_fn=collate))
+                        batch_size=config.data.batch_size, collate_fn=collate)
+                    corpus_paths, corpus_labels = fit_corpus_split(config.fit_corpus, fold)
+                    corpus_loader = None if config.fit_corpus == "train" else DataLoader(
+                        CachedCollection(corpus_paths, corpus_labels, preprocessor=preprocessor),
+                        batch_size=config.data.batch_size, collate_fn=collate)
+                    engine.fit(train_loader, corpus_loader)
 
                 # indexing runs on its own so its cost stays separate from querying
                 engine.prepare_gallery(loaders[0])

@@ -1,8 +1,8 @@
-# GEM pooling, no projection head.
-name: gem-nohead
+# GEM pooling, projection head, ZCA whitened.
+name: gem-head+zca+tta
 
 data:
-  path: /Users/timothee/Documents/programming/DIHT/data/cropped_data
+  path: /Users/timothee/Documents/programming/DIHT/data/original_data
   k_folds: 4
   seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
   gallery_instances: 1
@@ -14,9 +14,10 @@ channels:
   - extractor: siamese
     config: config/config.yaml
     pooling: gem
-    projection_head_size: 0
-    whiten: none
-    is_trainable: false
+    projection_head_size: 128
+    whiten: head_init
+    rotation_tta: true
+    is_trainable: true
     index: dense
     kernel: euclidean
     weight: 1.0
